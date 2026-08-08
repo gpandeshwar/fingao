@@ -1,0 +1,13 @@
+diff --git a/node_modules/@typescript/vfs/dist/vfs.cjs.development.js b/node_modules/@typescript/vfs/dist/vfs.cjs.development.js
+index 5ee9290..e91bb67 100644
+--- a/node_modules/@typescript/vfs/dist/vfs.cjs.development.js
++++ b/node_modules/@typescript/vfs/dist/vfs.cjs.development.js
+@@ -27,7 +27,7 @@ try {
+ } catch (error) {}
+ 
+ var hasProcess = typeof process !== "undefined";
+-var shouldDebug = hasLocalStorage && /*#__PURE__*/localStorage.getItem("DEBUG") || hasProcess && process.env.DEBUG;
++var shouldDebug = hasLocalStorage && typeof localStorage.getItem === "function" && /*#__PURE__*/localStorage.getItem("DEBUG") || hasProcess && process.env.DEBUG;
+ var debugLog = shouldDebug ? console.log : function (_message) {
+   return "";
+ };

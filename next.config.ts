@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Suppress hydration warnings from Amplify UI
+  reactStrictMode: true,
 };
 
 export default nextConfig;
