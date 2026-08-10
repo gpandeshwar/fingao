@@ -39,8 +39,9 @@ interface ExtractedHolding {
   ticker: string;
   shares: number;
   costBasis: number;
+  currentValue: number;
   purchaseDate?: string;
-  accountType?: string;
+  tickerType?: string;
   notes?: string;
 }
 
@@ -55,11 +56,16 @@ interface ExtractionResult {
 const EXTRACTION_PROMPT = `You are a financial document parser. Analyze the following document content and extract all investment holdings.
 
 For each holding, extract:
-- ticker: The stock/ETF ticker symbol (e.g., AAPL, MSFT, VTI)
-- shares: Number of shares held (numeric)
-- costBasis: Average cost per share in USD (numeric)
+- ticker: The stock/ETF/fund ticker symbol (e.g., AAPL, MSFT, VTI, VFIAX). For cash positions (money market, sweep accounts, uninvested cash), use "CASH" as the ticker.
+- shares: Number of shares held (numeric). For cash positions, use 1.
+- costBasis: Average cost per share in USD (numeric). For cash positions, use the cash balance amount.
+- currentValue: Current market value per share in USD (numeric). If not shown in the document, use the cost basis as a fallback. For cash positions, use the cash balance amount.
 - purchaseDate: Date of purchase if available (YYYY-MM-DD format)
-- accountType: Type of account if mentioned (Brokerage, IRA, 401k, Roth IRA)
+- tickerType: The type of investment instrument. Must be one of: "Stock", "ETF", "MutualFund", or "Cash". Classify based on the ticker:
+  - "Stock" for individual company stocks (AAPL, MSFT, GOOGL, etc.)
+  - "ETF" for exchange traded funds (VTI, SPY, QQQ, SCHD, etc.) — also classify as "ETF" if the description contains "exchange traded fund", "exchange traded fund", "exchange tr fd" or "ETF"
+  - "MutualFund" for mutual funds (VFIAX, FXAIX, etc. — typically 5 letters ending in X)
+  - "Cash" for money market funds, sweep accounts, or any cash/uninvested positions. The ticker MUST be "CASH" and tickerType MUST be "Cash".
 - notes: Any relevant notes about the position
 
 Return ONLY valid JSON in this exact format:
@@ -69,9 +75,19 @@ Return ONLY valid JSON in this exact format:
       "ticker": "AAPL",
       "shares": 50,
       "costBasis": 142.50,
+      "currentValue": 185.25,
       "purchaseDate": "2023-03-15",
-      "accountType": "Brokerage",
+      "tickerType": "Stock",
       "notes": ""
+    },
+    {
+      "ticker": "CASH",
+      "shares": 1,
+      "costBasis": 5000.00,
+      "currentValue": 5000.00,
+      "purchaseDate": "",
+      "tickerType": "Cash",
+      "notes": "Uninvested cash"
     }
   ],
   "summary": "Brief summary of what was found in the document"

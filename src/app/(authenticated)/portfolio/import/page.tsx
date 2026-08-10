@@ -29,8 +29,9 @@ interface ExtractedHolding {
   ticker: string;
   shares: number;
   costBasis: number;
+  currentValue: number;
   purchaseDate?: string;
-  accountType?: string;
+  tickerType?: string;
   notes?: string;
   selected?: boolean;
 }
@@ -92,15 +93,44 @@ export default function ImportPage() {
       });
 
       if (response.data?.success) {
-        const extractedHoldings = (response.data.holdings || []).map(
-          (h: any) => ({
-            ...h,
-            selected: true,
-          })
-        );
-        setHoldings(extractedHoldings);
-        setSummary(response.data.summary || "");
-        setStep("review");
+        const rawHoldings = response.data.holdings || [];
+        
+        // Validate required fields and collect errors
+        const validHoldings: ExtractedHolding[] = [];
+        const validationErrors: string[] = [];
+
+        rawHoldings.forEach((h: any, index: number) => {
+          const missing: string[] = [];
+          if (!h.ticker) missing.push("ticker");
+          if (h.shares == null || isNaN(h.shares)) missing.push("shares");
+          if (h.costBasis == null || isNaN(h.costBasis)) missing.push("costBasis");
+          if (h.currentValue == null || isNaN(h.currentValue)) missing.push("currentValue");
+
+          if (missing.length > 0) {
+            validationErrors.push(
+              `Holding #${index + 1}${h.ticker ? ` (${h.ticker})` : ""}: missing ${missing.join(", ")}`
+            );
+          } else {
+            validHoldings.push({ ...h, selected: true });
+          }
+        });
+
+        if (validHoldings.length === 0 && validationErrors.length > 0) {
+          setError(
+            `Could not extract complete holdings. The following issues were found:\n\n${validationErrors.join("\n")}\n\nPlease ensure your document clearly shows ticker symbols, share counts, cost basis, and current value for each position.`
+          );
+          setStep("error");
+        } else {
+          if (validationErrors.length > 0) {
+            setSummary(
+              `${response.data.summary || ""} (${validationErrors.length} holding(s) skipped due to missing data: ${validationErrors.join("; ")})`
+            );
+          } else {
+            setSummary(response.data.summary || "");
+          }
+          setHoldings(validHoldings);
+          setStep("review");
+        }
       } else {
         setError(
           response.data?.error || "Failed to extract holdings from file"
@@ -147,8 +177,9 @@ export default function ImportPage() {
           ticker: holding.ticker,
           shares: holding.shares,
           costBasis: holding.costBasis,
+          currentValue: holding.currentValue,
           purchaseDate: holding.purchaseDate || new Date().toISOString().split("T")[0],
-          accountType: holding.accountType || "",
+          tickerType: holding.tickerType || "",
           notes: holding.notes || "",
         });
       }
@@ -360,21 +391,13 @@ export default function ImportPage() {
                   )}
                 </div>
 
-                <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="flex-1 grid grid-cols-2 sm:grid-cols-5 gap-2">
                   <div>
                     <p className="text-xs text-[var(--color-text-muted)]">
                       Ticker
                     </p>
                     <p className="font-medium text-[var(--color-text)]">
                       {holding.ticker}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-[var(--color-text-muted)]">
-                      Shares
-                    </p>
-                    <p className="text-sm text-[var(--color-text)]">
-                      {holding.shares}
                     </p>
                   </div>
                   <div>
@@ -387,10 +410,26 @@ export default function ImportPage() {
                   </div>
                   <div>
                     <p className="text-xs text-[var(--color-text-muted)]">
+                      Current Value
+                    </p>
+                    <p className="text-sm text-[var(--color-text)]">
+                      ${holding.currentValue.toFixed(2)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--color-text-muted)]">
                       Date
                     </p>
                     <p className="text-sm text-[var(--color-text)]">
                       {holding.purchaseDate || "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-[var(--color-text-muted)]">
+                      Type
+                    </p>
+                    <p className="text-sm text-[var(--color-text)]">
+                      {holding.tickerType || "—"}
                     </p>
                   </div>
                 </div>
@@ -472,7 +511,7 @@ export default function ImportPage() {
         <h3 className="text-lg font-semibold text-[var(--color-text)] mb-2">
           Import Failed
         </h3>
-        <p className="text-sm text-[var(--color-text-muted)] mb-6 max-w-md mx-auto">
+        <p className="text-sm text-[var(--color-text-muted)] mb-6 max-w-md mx-auto whitespace-pre-line">
           {error}
         </p>
         <div className="flex items-center justify-center gap-3">

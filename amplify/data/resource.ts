@@ -7,8 +7,10 @@ const schema = a.schema({
       ticker: a.string().required(),
       shares: a.float().required(),
       costBasis: a.float().required(),
+      currentValue: a.float().required(),
       purchaseDate: a.date().required(),
       parentTicker: a.string(),
+      tickerType: a.string(),
       notes: a.string(),
     })
     .authorization((allow) => [allow.owner()]),
@@ -39,8 +41,9 @@ const schema = a.schema({
       ticker: a.string().required(),
       shares: a.float().required(),
       costBasis: a.float().required(),
+      currentValue: a.float().required(),
       purchaseDate: a.string(),
-      accountType: a.string(),
+      tickerType: a.string(),
       notes: a.string(),
     })
     .authorization((allow) => [allow.owner()]),
@@ -50,8 +53,9 @@ const schema = a.schema({
     ticker: a.string().required(),
     shares: a.float().required(),
     costBasis: a.float().required(),
+    currentValue: a.float().required(),
     purchaseDate: a.string(),
-    accountType: a.string(),
+    tickerType: a.string(),
     notes: a.string(),
   }),
 
