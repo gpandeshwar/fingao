@@ -12,6 +12,8 @@ import {
   Trash2,
   List,
   X,
+  Check,
+  Filter,
 } from "lucide-react";
 import { generateClient } from "aws-amplify/data";
 
@@ -44,6 +46,8 @@ export default function PortfolioPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [showTransactions, setShowTransactions] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [txnFilter, setTxnFilter] = useState("");
 
   useEffect(() => {
     fetchHoldings();
@@ -53,16 +57,18 @@ export default function PortfolioPage() {
     try {
       setLoading(true);
       const response: any = await client.models.ExtractedHolding.list({});
-      const items = (response.data || []).map((item: any) => ({
-        id: item.id,
-        ticker: item.ticker,
-        shares: item.shares,
-        costBasis: item.costBasis,
-        currentValue: item.currentValue || item.costBasis,
-        purchaseDate: item.purchaseDate || "",
-        tickerType: item.tickerType || "",
-        notes: item.notes || "",
-      }));
+      const items = (response.data || [])
+        .filter((item: any) => item.ticker) // skip rows with no ticker
+        .map((item: any) => ({
+          id: item.id,
+          ticker: item.ticker || "UNKNOWN",
+          shares: item.shares ?? 0,
+          costBasis: item.costBasis ?? 0,
+          currentValue: item.currentValue ?? item.costBasis ?? 0,
+          purchaseDate: item.purchaseDate || "",
+          tickerType: item.tickerType || "",
+          notes: item.notes || "",
+        }));
       setHoldings(items);
     } catch (err) {
       console.error("Error fetching holdings:", err);
@@ -75,10 +81,67 @@ export default function PortfolioPage() {
     try {
       await client.models.ExtractedHolding.delete({ id });
       setHoldings((prev) => prev.filter((h) => h.id !== id));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     } catch (err) {
       console.error("Error deleting holding:", err);
     }
   }
+
+  async function deleteSelected() {
+    const ids = Array.from(selectedIds);
+    for (const id of ids) {
+      try {
+        await client.models.ExtractedHolding.delete({ id });
+      } catch (err) {
+        console.error("Error deleting holding:", id, err);
+      }
+    }
+    setHoldings((prev) => prev.filter((h) => !selectedIds.has(h.id)));
+    setSelectedIds(new Set());
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAll(filteredItems: Holding[]) {
+    const allFilteredIds = filteredItems.map((h) => h.id);
+    const allSelected = allFilteredIds.every((id) => selectedIds.has(id));
+    if (allSelected) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        allFilteredIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } else {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        allFilteredIds.forEach((id) => next.add(id));
+        return next;
+      });
+    }
+  }
+
+  // Filter transactions
+  const filteredTransactions = holdings.filter(
+    (h) =>
+      h.ticker.toLowerCase().includes(txnFilter.toLowerCase()) ||
+      (h.tickerType || "").toLowerCase().includes(txnFilter.toLowerCase()) ||
+      (h.purchaseDate || "").includes(txnFilter) ||
+      (h.notes || "").toLowerCase().includes(txnFilter.toLowerCase())
+  );
 
   // Consolidate holdings by ticker (combine duplicate tickers)
   function consolidateHoldings(items: Holding[]): Holding[] {
@@ -448,15 +511,40 @@ export default function PortfolioPage() {
         <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl overflow-hidden">
           <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
             <h3 className="font-semibold text-[var(--color-text)]">
-              All Transactions ({holdings.length})
+              All Transactions ({filteredTransactions.length})
             </h3>
-            <button
-              onClick={() => setShowTransactions(false)}
-              className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-              aria-label="Close transactions"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-2">
+              {selectedIds.size > 0 && (
+                <button
+                  onClick={deleteSelected}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-[var(--color-danger)] text-white rounded-lg text-xs font-medium hover:opacity-90 transition-opacity"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  Delete {selectedIds.size}
+                </button>
+              )}
+              <button
+                onClick={() => setShowTransactions(false)}
+                className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                aria-label="Close transactions"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Filter */}
+          <div className="px-6 py-3 border-b border-[var(--color-border)]">
+            <div className="relative">
+              <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-text-muted)]" />
+              <input
+                type="text"
+                placeholder="Filter by ticker, type, date, or notes..."
+                value={txnFilter}
+                onChange={(e) => setTxnFilter(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)]"
+              />
+            </div>
           </div>
 
           {/* Desktop */}
@@ -464,6 +552,23 @@ export default function PortfolioPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-[var(--color-border)]">
+                  <th className="px-6 py-3 text-left">
+                    <button
+                      onClick={() => toggleSelectAll(filteredTransactions)}
+                      className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                        filteredTransactions.length > 0 &&
+                        filteredTransactions.every((h) => selectedIds.has(h.id))
+                          ? "border-[var(--color-primary)] bg-[var(--color-primary)]"
+                          : "border-[var(--color-border)] hover:border-[var(--color-primary)]/50"
+                      }`}
+                      aria-label="Select all"
+                    >
+                      {filteredTransactions.length > 0 &&
+                        filteredTransactions.every((h) =>
+                          selectedIds.has(h.id)
+                        ) && <Check className="w-3 h-3 text-white" />}
+                    </button>
+                  </th>
                   <th className="text-left px-6 py-3 text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wide">
                     Ticker
                   </th>
@@ -486,11 +591,30 @@ export default function PortfolioPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border)]">
-                {holdings.map((h) => (
+                {filteredTransactions.map((h) => (
                   <tr
                     key={h.id}
-                    className="hover:bg-[var(--color-bg-secondary)] transition-colors"
+                    className={`transition-colors ${
+                      selectedIds.has(h.id)
+                        ? "bg-[var(--color-primary)]/5"
+                        : "hover:bg-[var(--color-bg-secondary)]"
+                    }`}
                   >
+                    <td className="px-6 py-3">
+                      <button
+                        onClick={() => toggleSelect(h.id)}
+                        className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                          selectedIds.has(h.id)
+                            ? "border-[var(--color-primary)] bg-[var(--color-primary)]"
+                            : "border-[var(--color-border)] hover:border-[var(--color-primary)]/50"
+                        }`}
+                        aria-label={`Select ${h.ticker}`}
+                      >
+                        {selectedIds.has(h.id) && (
+                          <Check className="w-3 h-3 text-white" />
+                        )}
+                      </button>
+                    </td>
                     <td className="px-6 py-3 text-sm font-medium text-[var(--color-text)]">
                       {h.ticker}
                     </td>
@@ -530,20 +654,35 @@ export default function PortfolioPage() {
 
           {/* Mobile */}
           <div className="md:hidden divide-y divide-[var(--color-border)]">
-            {holdings.map((h) => (
-              <div key={h.id} className="p-4 flex items-center justify-between">
-                <div>
+            {filteredTransactions.map((h) => (
+              <div
+                key={h.id}
+                className={`p-4 flex items-center gap-3 ${
+                  selectedIds.has(h.id) ? "bg-[var(--color-primary)]/5" : ""
+                }`}
+              >
+                <button
+                  onClick={() => toggleSelect(h.id)}
+                  className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                    selectedIds.has(h.id)
+                      ? "border-[var(--color-primary)] bg-[var(--color-primary)]"
+                      : "border-[var(--color-border)]"
+                  }`}
+                  aria-label={`Select ${h.ticker}`}
+                >
+                  {selectedIds.has(h.id) && (
+                    <Check className="w-3 h-3 text-white" />
+                  )}
+                </button>
+                <div className="flex-1">
                   <p className="font-medium text-[var(--color-text)]">
                     {h.ticker}
                   </p>
                   <p className="text-xs text-[var(--color-text-muted)]">
-                    {h.shares} shares @ {formatCurrency(h.costBasis)}
-                  </p>
-                  <p className="text-xs text-[var(--color-text-muted)]">
-                    {h.purchaseDate || "No date"}
+                    {h.shares} shares @ {formatCurrency(h.costBasis)} · {h.purchaseDate || "No date"}
                   </p>
                 </div>
-                <div className="text-right flex items-center gap-3">
+                <div className="text-right flex items-center gap-2">
                   <div>
                     <p className="text-sm font-medium text-[var(--color-text)]">
                       {formatCurrency(h.currentValue * h.shares)}
@@ -565,6 +704,13 @@ export default function PortfolioPage() {
               </div>
             ))}
           </div>
+
+          {/* No filter results */}
+          {filteredTransactions.length === 0 && txnFilter && (
+            <div className="p-8 text-center text-sm text-[var(--color-text-muted)]">
+              No transactions match &quot;{txnFilter}&quot;
+            </div>
+          )}
         </div>
       )}
     </div>
