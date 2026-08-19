@@ -1,5 +1,6 @@
 import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
 import { extractPortfolio } from "../functions/extract-portfolio/resource.js";
+import { getTickerHoldings } from "../functions/get-ticker-holdings/resource.js";
 
 const schema = a.schema({
   Portfolio: a
@@ -75,6 +76,30 @@ const schema = a.schema({
     .returns(a.ref("ExtractionResult"))
     .authorization((allow) => [allow.authenticated()])
     .handler(a.handler.function(extractPortfolio)),
+
+  // Underlying holdings lookup
+  UnderlyingHoldingItem: a.customType({
+    ticker: a.string().required(),
+    weight: a.float().required(),
+    name: a.string(),
+  }),
+
+  TickerHoldingsResult: a.customType({
+    ticker: a.string().required(),
+    holdings: a.ref("UnderlyingHoldingItem").required().array(),
+    lastUpdated: a.string(),
+    found: a.boolean().required(),
+    dividendYield: a.float(),
+  }),
+
+  getTickerHoldings: a
+    .query()
+    .arguments({
+      ticker: a.string().required(),
+    })
+    .returns(a.ref("TickerHoldingsResult"))
+    .authorization((allow) => [allow.authenticated()])
+    .handler(a.handler.function(getTickerHoldings)),
 });
 
 export type Schema = ClientSchema<typeof schema>;

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   PieChart,
@@ -8,7 +9,11 @@ import {
   AlertTriangle,
   TrendingUp,
   BarChart3,
+  Loader2,
 } from "lucide-react";
+import { generateClient } from "aws-amplify/data";
+
+const client = generateClient<any>();
 
 const analysisCards = [
   {
@@ -36,10 +41,10 @@ const analysisCards = [
     bgColor: "bg-amber-100 dark:bg-amber-900/30",
   },
   {
-    title: "Geographic Exposure",
-    description: "US vs international vs emerging market allocation",
+    title: "Holdings Breakdown",
+    description: "See effective stock exposure including underlying holdings of ETFs and funds",
     icon: Globe,
-    href: "/analyze/sectors",
+    href: "/analyze/holdings-breakdown",
     color: "text-purple-500",
     bgColor: "bg-purple-100 dark:bg-purple-900/30",
   },
@@ -61,15 +66,144 @@ const analysisCards = [
   },
 ];
 
-// Mock portfolio health
-const healthMetrics = [
-  { label: "Diversification", score: 72, status: "Good" },
-  { label: "Risk Level", score: 58, status: "Moderate" },
-  { label: "Income Yield", score: 45, status: "Low" },
-  { label: "Growth Potential", score: 85, status: "Strong" },
-];
+interface HealthMetric {
+  label: string;
+  score: number;
+  status: string;
+  detail?: string;
+}
 
 export default function AnalyzePage() {
+  const [healthMetrics, setHealthMetrics] = useState<HealthMetric[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dividendYield, setDividendYield] = useState<number>(0);
+
+  useEffect(() => {
+    calculateHealth();
+  }, []);
+
+  async function calculateHealth() {
+    try {
+      setLoading(true);
+
+      // Fetch portfolio holdings
+      const response: any = await client.models.ExtractedHolding.list({});
+      const holdings = (response.data || []).filter((h: any) => h.ticker);
+
+      if (holdings.length === 0) {
+        setHealthMetrics([
+          { label: "Diversification", score: 0, status: "No data" },
+          { label: "Risk Level", score: 0, status: "No data" },
+          { label: "Dividend Yield", score: 0, status: "No data" },
+          { label: "Growth Potential", score: 0, status: "No data" },
+        ]);
+        setLoading(false);
+        return;
+      }
+
+      // Consolidate by ticker
+      const consolidated = new Map<string, { ticker: string; value: number; tickerType: string }>();
+      let totalValue = 0;
+
+      for (const h of holdings) {
+        const ticker = (h.ticker || "").toUpperCase();
+        const value = (h.currentValue ?? h.costBasis ?? 0) * (h.shares ?? 0);
+        totalValue += value;
+
+        if (consolidated.has(ticker)) {
+          consolidated.get(ticker)!.value += value;
+        } else {
+          consolidated.set(ticker, { ticker, value, tickerType: h.tickerType || "" });
+        }
+      }
+
+      const uniqueHoldings = Array.from(consolidated.values());
+
+      // 1. Diversification score (based on number of holdings and concentration)
+      const topHoldingPct = uniqueHoldings.length > 0
+        ? (uniqueHoldings.sort((a, b) => b.value - a.value)[0].value / totalValue) * 100
+        : 100;
+      const diversificationScore = Math.min(
+        100,
+        Math.round(
+          (Math.min(uniqueHoldings.length, 20) / 20) * 50 + // up to 50 points for count
+          (1 - topHoldingPct / 100) * 50 // up to 50 points for low concentration
+        )
+      );
+
+      // 2. Risk level (higher concentration = higher risk)
+      const top3Pct = uniqueHoldings
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 3)
+        .reduce((sum, h) => sum + h.value, 0) / totalValue * 100;
+      const riskScore = Math.round(100 - top3Pct); // Lower top3 concentration = lower risk (higher score)
+
+      // 3. Dividend Yield — fetch from ticker_holdings for each ticker
+      let weightedDividendYield = 0;
+      let tickersWithYield = 0;
+
+      for (const holding of uniqueHoldings) {
+        if (holding.ticker === "CASH") continue;
+
+        try {
+          const tickerData: any = await client.queries.getTickerHoldings({
+            ticker: holding.ticker,
+          });
+
+          if (tickerData?.data?.dividendYield && tickerData.data.dividendYield > 0) {
+            const weight = holding.value / totalValue;
+            weightedDividendYield += tickerData.data.dividendYield * weight;
+            tickersWithYield++;
+          }
+        } catch {
+          // Skip if query fails for this ticker
+        }
+      }
+
+      setDividendYield(weightedDividendYield);
+
+      // Score dividend yield: 0% = 0, 2% = 50, 4%+ = 100
+      const dividendScore = Math.min(100, Math.round((weightedDividendYield / 4) * 100));
+
+      // 4. Growth potential (ETF/stock mix — more stocks = more growth potential)
+      const stockValue = uniqueHoldings
+        .filter((h) => h.tickerType === "Stock")
+        .reduce((sum, h) => sum + h.value, 0);
+      const growthScore = Math.min(100, Math.round((stockValue / totalValue) * 100));
+
+      setHealthMetrics([
+        {
+          label: "Diversification",
+          score: diversificationScore,
+          status: diversificationScore >= 70 ? "Good" : diversificationScore >= 40 ? "Moderate" : "Low",
+          detail: `${uniqueHoldings.length} holdings, top position ${topHoldingPct.toFixed(0)}%`,
+        },
+        {
+          label: "Risk Level",
+          score: riskScore,
+          status: riskScore >= 70 ? "Low Risk" : riskScore >= 40 ? "Moderate" : "High Risk",
+          detail: `Top 3 = ${top3Pct.toFixed(0)}% of portfolio`,
+        },
+        {
+          label: "Dividend Yield",
+          score: dividendScore,
+          status: weightedDividendYield >= 3 ? "Strong" : weightedDividendYield >= 1.5 ? "Moderate" : "Low",
+          detail: `${weightedDividendYield.toFixed(2)}% weighted avg (${tickersWithYield} tickers)`,
+        },
+        {
+          label: "Growth Potential",
+          score: growthScore,
+          status: growthScore >= 70 ? "Strong" : growthScore >= 40 ? "Moderate" : "Low",
+          detail: `${((stockValue / totalValue) * 100).toFixed(0)}% in individual stocks`,
+        },
+      ]);
+    } catch (err) {
+      console.error("Error calculating health:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div className="space-y-8">
       {/* Portfolio Health Score */}
@@ -77,38 +211,77 @@ export default function AnalyzePage() {
         <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
           Portfolio Health
         </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {healthMetrics.map((metric) => (
-            <div key={metric.label} className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-[var(--color-text-secondary)]">
-                  {metric.label}
-                </span>
-                <span className="text-sm font-medium text-[var(--color-text)]">
-                  {metric.score}/100
-                </span>
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-6 h-6 text-[var(--color-primary)] animate-spin" />
+            <span className="ml-2 text-sm text-[var(--color-text-muted)]">
+              Analyzing portfolio...
+            </span>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {healthMetrics.map((metric) => (
+              <div key={metric.label} className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-[var(--color-text-secondary)]">
+                    {metric.label}
+                  </span>
+                  <span className="text-sm font-medium text-[var(--color-text)]">
+                    {metric.score}/100
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-[var(--color-bg-tertiary)] rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{
+                      width: `${metric.score}%`,
+                      backgroundColor:
+                        metric.score >= 70
+                          ? "var(--color-success)"
+                          : metric.score >= 40
+                          ? "var(--color-warning)"
+                          : "var(--color-danger)",
+                    }}
+                  />
+                </div>
+                <p className="text-xs text-[var(--color-text-muted)]">
+                  {metric.status}
+                </p>
+                {metric.detail && (
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    {metric.detail}
+                  </p>
+                )}
               </div>
-              <div className="w-full h-2 bg-[var(--color-bg-tertiary)] rounded-full overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{
-                    width: `${metric.score}%`,
-                    backgroundColor:
-                      metric.score >= 70
-                        ? "var(--color-success)"
-                        : metric.score >= 50
-                        ? "var(--color-warning)"
-                        : "var(--color-danger)",
-                  }}
-                />
-              </div>
-              <p className="text-xs text-[var(--color-text-muted)]">
-                {metric.status}
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Dividend Yield Summary */}
+      {!loading && dividendYield > 0 && (
+        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl p-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-[var(--color-text-secondary)]">
+                Weighted Average Dividend Yield
+              </p>
+              <p className="text-2xl font-bold text-[var(--color-text)] mt-1">
+                {dividendYield.toFixed(2)}%
               </p>
             </div>
-          ))}
+            <div className="text-right">
+              <p className="text-sm text-[var(--color-text-muted)]">
+                Est. Annual Income
+              </p>
+              <p className="text-lg font-semibold text-[var(--color-success)]">
+                {/* Placeholder — needs total portfolio value */}
+                Based on portfolio value
+              </p>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Analysis Sections */}
       <div>
@@ -149,16 +322,14 @@ export default function AnalyzePage() {
               AI Insights
             </h3>
             <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed">
-              Your portfolio is heavily concentrated in technology (55%). Consider
-              diversifying into healthcare or consumer staples to reduce sector
-              risk. Your top 3 holdings represent 55% of total value — this
-              creates concentration risk.
+              Use the AI chat to ask about your portfolio composition, get
+              personalized recommendations, or understand risk factors.
             </p>
             <Link
               href="/ai-chat"
               className="inline-flex items-center gap-1 mt-3 text-sm font-medium text-[var(--color-primary)] hover:underline"
             >
-              Ask AI for more details →
+              Ask AI for details →
             </Link>
           </div>
         </div>
