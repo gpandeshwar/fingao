@@ -90,6 +90,7 @@ const schema = a.schema({
     lastUpdated: a.string(),
     found: a.boolean().required(),
     dividendYield: a.float(),
+    sector: a.string(),
   }),
 
   getTickerHoldings: a

@@ -21,6 +21,7 @@ interface GetTickerHoldingsResult {
   lastUpdated: string | null;
   found: boolean;
   dividendYield: number | null;
+  sector: string | null;
 }
 
 export const handler = async (
@@ -29,12 +30,12 @@ export const handler = async (
   const ticker = (event.arguments?.ticker || event.ticker || "").toUpperCase();
 
   if (!ticker) {
-    return { ticker: "", holdings: [], lastUpdated: null, found: false, dividendYield: null };
+    return { ticker: "", holdings: [], lastUpdated: null, found: false, dividendYield: null, sector: null };
   }
 
   if (!TICKER_HOLDINGS_TABLE) {
     console.error("TICKER_HOLDINGS_TABLE not set");
-    return { ticker, holdings: [], lastUpdated: null, found: false, dividendYield: null };
+    return { ticker, holdings: [], lastUpdated: null, found: false, dividendYield: null, sector: null };
   }
 
   try {
@@ -46,13 +47,30 @@ export const handler = async (
     );
 
     if (!result.Item) {
-      return { ticker, holdings: [], lastUpdated: null, found: false, dividendYield: null };
+      return { ticker, holdings: [], lastUpdated: null, found: false, dividendYield: null, sector: null };
     }
 
-    // Extract dividend yield from the item
-    const dividendYield = parseFloat(
-      result.Item.dividend_yield ?? result.Item.dividendYield ?? result.Item.yield ?? "0"
-    ) || null;
+    // Extract dividend yield from the item (nested under metadata)
+    const metadata = result.Item.metadata || {};
+    const rawYield = metadata.dividend_yield ?? metadata.dividendYield ?? result.Item.dividend_yield ?? result.Item.dividendYield;
+    let dividendYield: number | null = null;
+    if (rawYield !== undefined && rawYield !== null) {
+      const parsed = typeof rawYield === "number" ? rawYield : parseFloat(String(rawYield));
+      if (!isNaN(parsed) && parsed > 0) {
+        dividendYield = parsed;
+      }
+    }
+
+    // Extract sector from metadata.sector or metadata.category
+    // If value contains a hyphen or forward slash, take the text before it
+    const rawSector = metadata.sector ?? metadata.category ?? null;
+    let sector: string | null = null;
+    if (rawSector) {
+      const sectorStr = String(rawSector).trim();
+      sector = sectorStr.split(/[-\/]/)[0].trim();
+    }
+
+    console.log(`Ticker ${ticker}: dividend_yield=${dividendYield}, sector=${sector}`);
 
     // Parse holdings — the agent stores them in various formats
     // Try to extract a holdings array from the item
@@ -107,9 +125,10 @@ export const handler = async (
       lastUpdated: result.Item.lastUpdated || null,
       found: true,
       dividendYield,
+      sector,
     };
   } catch (err: any) {
     console.error(`Error fetching ticker ${ticker}:`, err);
-    return { ticker, holdings: [], lastUpdated: null, found: false, dividendYield: null };
+    return { ticker, holdings: [], lastUpdated: null, found: false, dividendYield: null, sector: null };
   }
 };

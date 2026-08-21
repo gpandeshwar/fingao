@@ -4,6 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import { generateClient } from "aws-amplify/data";
+import { fetchAuthSession } from "aws-amplify/auth";
+
+const client = generateClient<any>();
 
 export default function AddHoldingPage() {
   const router = useRouter();
@@ -11,17 +15,40 @@ export default function AddHoldingPage() {
     ticker: "",
     shares: "",
     costBasis: "",
+    currentPrice: "",
     purchaseDate: "",
     parentTicker: "",
-    accountType: "Brokerage",
+    accountType: "Stock",
     notes: "",
   });
+  const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // TODO: Save to Amplify/DynamoDB
-    console.log("Saving holding:", formData);
-    router.push("/portfolio");
+    setSaving(true);
+
+    try {
+      const session = await fetchAuthSession();
+      const userId = session.userSub || "";
+
+      await client.models.ExtractedHolding.create({
+        userId,
+        ticker: formData.ticker.toUpperCase(),
+        shares: parseFloat(formData.shares),
+        costBasis: parseFloat(formData.costBasis),
+        currentValue: formData.currentPrice
+          ? parseFloat(formData.currentPrice)
+          : parseFloat(formData.costBasis),
+        purchaseDate: formData.purchaseDate || new Date().toISOString().split("T")[0],
+        tickerType: formData.accountType,
+        notes: formData.notes || "",
+      });
+
+      router.push("/portfolio");
+    } catch (err) {
+      console.error("Error saving holding:", err);
+      setSaving(false);
+    }
   };
 
   return (
@@ -107,6 +134,27 @@ export default function AddHoldingPage() {
             </div>
           </div>
 
+          {/* Current Price (optional) */}
+          <div>
+            <label
+              htmlFor="currentPrice"
+              className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1.5"
+            >
+              Current Price (per share)
+            </label>
+            <input
+              id="currentPrice"
+              type="number"
+              step="0.01"
+              placeholder="e.g. 185.25 (optional — defaults to cost basis)"
+              value={formData.currentPrice}
+              onChange={(e) =>
+                setFormData({ ...formData, currentPrice: e.target.value })
+              }
+              className="w-full px-4 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)]"
+            />
+          </div>
+
           {/* Purchase Date & Account Type */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -132,7 +180,7 @@ export default function AddHoldingPage() {
                 htmlFor="accountType"
                 className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1.5"
               >
-                Account Type
+                Ticker Type
               </label>
               <select
                 id="accountType"
@@ -142,10 +190,10 @@ export default function AddHoldingPage() {
                 }
                 className="w-full px-4 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)]"
               >
-                <option value="Brokerage">Brokerage</option>
-                <option value="IRA">IRA</option>
-                <option value="Roth IRA">Roth IRA</option>
-                <option value="401k">401(k)</option>
+                <option value="Stock">Stock</option>
+                <option value="ETF">ETF</option>
+                <option value="MutualFund">Mutual Fund</option>
+                <option value="Cash">Cash</option>
               </select>
             </div>
           </div>
@@ -197,9 +245,10 @@ export default function AddHoldingPage() {
           <div className="flex items-center gap-3 pt-4">
             <button
               type="submit"
-              className="bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white px-6 py-2.5 rounded-lg font-medium transition-colors"
+              disabled={saving}
+              className="bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] disabled:opacity-50 text-white px-6 py-2.5 rounded-lg font-medium transition-colors"
             >
-              Add Holding
+              {saving ? "Saving..." : "Add Holding"}
             </button>
             <Link
               href="/portfolio"

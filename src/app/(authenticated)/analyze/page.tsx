@@ -20,9 +20,10 @@ const analysisCards = [
     title: "Sector Breakdown",
     description: "View allocation across technology, healthcare, financials, and more",
     icon: PieChart,
-    href: "/analyze/sectors",
+    href: "#sector-breakdown",
     color: "text-[var(--color-primary)]",
     bgColor: "bg-blue-100 dark:bg-blue-900/30",
+    action: "toggleSector",
   },
   {
     title: "Performance",
@@ -73,10 +74,36 @@ interface HealthMetric {
   detail?: string;
 }
 
+interface SectorItem {
+  sector: string;
+  value: number;
+  percentage: number;
+  tickers: string[];
+}
+
+const SECTOR_COLORS: Record<string, string> = {
+  Technology: "#3b82f6",
+  Healthcare: "#10b981",
+  Financials: "#f59e0b",
+  Energy: "#ef4444",
+  Industrials: "#6366f1",
+  "Consumer Discretionary": "#8b5cf6",
+  "Consumer Staples": "#14b8a6",
+  "Communication Services": "#ec4899",
+  Utilities: "#84cc16",
+  "Real Estate": "#f97316",
+  Materials: "#a855f7",
+  Cash: "#94a3b8",
+  Other: "#6b7280",
+};
+
 export default function AnalyzePage() {
   const [healthMetrics, setHealthMetrics] = useState<HealthMetric[]>([]);
   const [loading, setLoading] = useState(true);
   const [dividendYield, setDividendYield] = useState<number>(0);
+  const [sectors, setSectors] = useState<SectorItem[]>([]);
+  const [portfolioValue, setPortfolioValue] = useState<number>(0);
+  const [showSectorBreakdown, setShowSectorBreakdown] = useState(false);
 
   useEffect(() => {
     calculateHealth();
@@ -118,6 +145,7 @@ export default function AnalyzePage() {
       }
 
       const uniqueHoldings = Array.from(consolidated.values());
+      setPortfolioValue(totalValue);
 
       // 1. Diversification score (based on number of holdings and concentration)
       const topHoldingPct = uniqueHoldings.length > 0
@@ -138,27 +166,77 @@ export default function AnalyzePage() {
         .reduce((sum, h) => sum + h.value, 0) / totalValue * 100;
       const riskScore = Math.round(100 - top3Pct); // Lower top3 concentration = lower risk (higher score)
 
-      // 3. Dividend Yield — fetch from ticker_holdings for each ticker
+      // 3. Fetch ticker data (dividend yield + sector) in parallel
       let weightedDividendYield = 0;
       let tickersWithYield = 0;
 
-      for (const holding of uniqueHoldings) {
-        if (holding.ticker === "CASH") continue;
-
-        try {
-          const tickerData: any = await client.queries.getTickerHoldings({
-            ticker: holding.ticker,
-          });
-
-          if (tickerData?.data?.dividendYield && tickerData.data.dividendYield > 0) {
-            const weight = holding.value / totalValue;
-            weightedDividendYield += tickerData.data.dividendYield * weight;
-            tickersWithYield++;
+      const tickersToFetch = uniqueHoldings.filter((h) => h.ticker !== "CASH");
+      const tickerResults = await Promise.all(
+        tickersToFetch.map(async (holding) => {
+          try {
+            const res: any = await client.queries.getTickerHoldings({ ticker: holding.ticker });
+            return {
+              ticker: holding.ticker,
+              dividendYield: res?.data?.dividendYield,
+              sector: res?.data?.sector || null,
+              weight: holding.value / totalValue,
+              value: holding.value,
+            };
+          } catch {
+            return {
+              ticker: holding.ticker,
+              dividendYield: null,
+              sector: null,
+              weight: holding.value / totalValue,
+              value: holding.value,
+            };
           }
-        } catch {
-          // Skip if query fails for this ticker
+        })
+      );
+
+      // Calculate weighted dividend yield
+      for (const result of tickerResults) {
+        const dy = typeof result.dividendYield === "number"
+          ? result.dividendYield
+          : parseFloat(String(result.dividendYield || "0"));
+
+        if (!isNaN(dy) && dy > 0) {
+          weightedDividendYield += dy * result.weight;
+          tickersWithYield++;
         }
       }
+
+      console.log(`Total weighted dividend yield: ${weightedDividendYield.toFixed(4)}%, tickers with data: ${tickersWithYield}`);
+
+      // Calculate sector breakdown
+      const sectorMap = new Map<string, { value: number; tickers: string[] }>();
+      for (const result of tickerResults) {
+        const sector = result.sector || "Other";
+        if (sectorMap.has(sector)) {
+          const entry = sectorMap.get(sector)!;
+          entry.value += result.value;
+          entry.tickers.push(result.ticker);
+        } else {
+          sectorMap.set(sector, { value: result.value, tickers: [result.ticker] });
+        }
+      }
+      // Add CASH if present
+      const cashHolding = uniqueHoldings.find((h) => h.ticker === "CASH");
+      if (cashHolding) {
+        sectorMap.set("Cash", { value: cashHolding.value, tickers: ["CASH"] });
+      }
+
+      const sectorBreakdown = Array.from(sectorMap.entries())
+        .map(([sector, data]) => ({
+          sector,
+          value: data.value,
+          percentage: totalValue > 0 ? (data.value / totalValue) * 100 : 0,
+          tickers: data.tickers,
+        }))
+        .sort((a, b) => b.value - a.value);
+
+      setSectors(sectorBreakdown);
+      setDividendYield(weightedDividendYield);
 
       setDividendYield(weightedDividendYield);
 
@@ -271,14 +349,67 @@ export default function AnalyzePage() {
               </p>
             </div>
             <div className="text-right">
-              <p className="text-sm text-[var(--color-text-muted)]">
+              <p className="text-sm text-[var(--color-text-secondary)]">
                 Est. Annual Income
               </p>
-              <p className="text-lg font-semibold text-[var(--color-success)]">
-                {/* Placeholder — needs total portfolio value */}
-                Based on portfolio value
+              <p className="text-2xl font-bold text-[var(--color-success)] mt-1">
+                {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(
+                  portfolioValue * (dividendYield / 100)
+                )}
+              </p>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                ~{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(
+                  (portfolioValue * (dividendYield / 100)) / 12
+                )}/month
               </p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sector Breakdown */}
+      {!loading && showSectorBreakdown && sectors.length > 0 && (
+        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl p-6">
+          <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">
+            Sector Breakdown
+          </h2>
+          {/* Stacked bar */}
+          <div className="h-6 rounded-full overflow-hidden flex mb-4">
+            {sectors.map((s) => (
+              <div
+                key={s.sector}
+                style={{
+                  width: `${s.percentage}%`,
+                  backgroundColor: SECTOR_COLORS[s.sector] || SECTOR_COLORS["Other"],
+                }}
+                className="h-full transition-all hover:opacity-80"
+                title={`${s.sector}: ${s.percentage.toFixed(1)}%`}
+              />
+            ))}
+          </div>
+          {/* Detail rows */}
+          <div className="space-y-2">
+            {sectors.map((s) => (
+              <div key={s.sector} className="flex items-center gap-3">
+                <div
+                  className="w-3 h-3 rounded-sm shrink-0"
+                  style={{ backgroundColor: SECTOR_COLORS[s.sector] || SECTOR_COLORS["Other"] }}
+                />
+                <div className="flex-1 flex items-center justify-between">
+                  <div>
+                    <span className="text-sm text-[var(--color-text)]">
+                      {s.sector}
+                    </span>
+                    <span className="text-xs text-[var(--color-text-muted)] ml-2">
+                      {s.tickers.join(", ")}
+                    </span>
+                  </div>
+                  <span className="text-sm font-medium text-[var(--color-text)]">
+                    {s.percentage.toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -289,25 +420,47 @@ export default function AnalyzePage() {
           Analysis Tools
         </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {analysisCards.map((card) => (
-            <Link
-              key={card.title}
-              href={card.href}
-              className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl p-6 hover:border-[var(--color-primary)] hover:shadow-md transition-all group"
-            >
-              <div
-                className={`w-10 h-10 ${card.bgColor} rounded-lg flex items-center justify-center mb-4`}
+          {analysisCards.map((card) =>
+            (card as any).action === "toggleSector" ? (
+              <button
+                key={card.title}
+                onClick={() => setShowSectorBreakdown(!showSectorBreakdown)}
+                className={`text-left bg-[var(--color-bg)] border rounded-xl p-6 hover:border-[var(--color-primary)] hover:shadow-md transition-all group ${
+                  showSectorBreakdown ? "border-[var(--color-primary)] ring-2 ring-[var(--color-primary)]/20" : "border-[var(--color-border)]"
+                }`}
               >
-                <card.icon className={`w-5 h-5 ${card.color}`} />
-              </div>
-              <h3 className="font-medium text-[var(--color-text)] group-hover:text-[var(--color-primary)] mb-1">
-                {card.title}
-              </h3>
-              <p className="text-sm text-[var(--color-text-muted)]">
-                {card.description}
-              </p>
-            </Link>
-          ))}
+                <div
+                  className={`w-10 h-10 ${card.bgColor} rounded-lg flex items-center justify-center mb-4`}
+                >
+                  <card.icon className={`w-5 h-5 ${card.color}`} />
+                </div>
+                <h3 className="font-medium text-[var(--color-text)] group-hover:text-[var(--color-primary)] mb-1">
+                  {card.title}
+                </h3>
+                <p className="text-sm text-[var(--color-text-muted)]">
+                  {card.description}
+                </p>
+              </button>
+            ) : (
+              <Link
+                key={card.title}
+                href={card.href}
+                className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl p-6 hover:border-[var(--color-primary)] hover:shadow-md transition-all group"
+              >
+                <div
+                  className={`w-10 h-10 ${card.bgColor} rounded-lg flex items-center justify-center mb-4`}
+                >
+                  <card.icon className={`w-5 h-5 ${card.color}`} />
+                </div>
+                <h3 className="font-medium text-[var(--color-text)] group-hover:text-[var(--color-primary)] mb-1">
+                  {card.title}
+                </h3>
+                <p className="text-sm text-[var(--color-text-muted)]">
+                  {card.description}
+                </p>
+              </Link>
+            )
+          )}
         </div>
       </div>
 
